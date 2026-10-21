@@ -136,6 +136,11 @@ Para desenvolver, `dotnet run` abre o widget direto do código.
 A interface (`wwwroot/`) também abre num navegador comum com dados de exemplo (`mock.js`):
 sirva a pasta `wwwroot` (ex.: `python -m http.server`) e acesse `index.html` (`?mode=app` para o modo janela).
 
+## Licença
+
+[MIT](LICENSE): use, copie, modifique e redistribua à vontade, mantendo o aviso de copyright.
+O software é fornecido "como está", sem garantias.
+
 <details>
 <summary>Como funciona (detalhes técnicos)</summary>
 
