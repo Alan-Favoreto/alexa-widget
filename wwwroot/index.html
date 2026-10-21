@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Alexa</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body class="compact">
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7v9h-6v-6H9v6H3z"/></symbol>
+    <symbol id="i-alarm" viewBox="0 0 24 24"><circle cx="12" cy="13" r="7"/><path d="M12 9v4l2.5 2M5 4L2 7M19 4l3 3"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="3"/><circle cx="12" cy="14" r="3"/><path d="M12 7h.01"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></symbol>
+    <symbol id="i-routine" viewBox="0 0 24 24"><path d="M4 6h10M4 12h10M4 18h7M17 14l4 3-4 3z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M10 4a2 2 0 1 1 4 0v2h4v4h-2a2 2 0 1 0 0 4h2v4h-4v-2a2 2 0 1 0-4 0v2H6v-4h2a2 2 0 1 0 0-4H6V6h4z"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></symbol>
+    <symbol id="i-min" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  </svg>
+
+  <header class="titlebar">
+    <div class="brand"><span class="ring" aria-hidden="true"></span><span>Alexa</span></div>
+    <div class="actions">
+      <button id="btnRefresh" class="icon app-only" title="Atualizar" aria-label="Atualizar"><svg><use href="#i-refresh"/></svg></button>
+      <button id="btnMode" class="icon" title="Abrir como app" aria-label="Alternar modo"><svg><use href="#i-expand"/></svg></button>
+      <button id="btnMin" class="icon compact-only" title="Minimizar para a barra de tarefas" aria-label="Minimizar"><svg><use href="#i-min"/></svg></button>
+      <button id="btnHide" class="icon compact-only" title="Ocultar (fica na bandeja)" aria-label="Ocultar"><svg><use href="#i-close"/></svg></button>
+    </div>
+  </header>
+
+  <section id="login" class="login" hidden>
+    <span class="ring big" aria-hidden="true"></span>
+    <h1>Conecte sua conta Amazon</h1>
+    <p>O login abre a página oficial da Amazon. O widget guarda só o token de acesso, criptografado no seu usuário do Windows.</p>
+    <button id="btnLogin" class="primary">Entrar com a Amazon</button>
+    <button id="btnLoginBrowser" class="subtle">Entrar pelo navegador</button>
+    <form id="pasteForm" class="paste" hidden>
+      <ol>
+        <li>Entre na sua conta na aba que abriu no navegador.</li>
+        <li>No fim, a página fica em branco ou com erro. Isso é esperado.</li>
+        <li>Copie o endereço inteiro da barra (começa com <code>https://www.amazon.com.br/ap/maplanding</code>) e cole abaixo.</li>
+      </ol>
+      <div class="cmd">
+        <input id="pasteUrl" placeholder="Cole o endereço aqui" autocomplete="off">
+        <button type="submit" class="primary">Concluir</button>
+      </div>
+    </form>
+  </section>
+
+  <div id="app" class="layout" hidden>
+    <nav class="tabs" aria-label="Seções">
+      <button data-tab="command"><svg><use href="#i-chat"/></svg><span>Início</span></button>
+      <button data-tab="home"><svg><use href="#i-home"/></svg><span>Casa</span></button>
+      <button data-tab="alarms"><svg><use href="#i-alarm"/></svg><span>Alarmes</span></button>
+      <button data-tab="routines"><svg><use href="#i-routine"/></svg><span>Rotinas</span></button>
+      <button data-tab="more" class="compact-only"><svg><use href="#i-more"/></svg><span>Mais</span></button>
+      <button data-tab="skills" class="app-only"><svg><use href="#i-puzzle"/></svg><span>Skills</span></button>
+      <button data-tab="music" class="app-only"><svg><use href="#i-music"/></svg><span>Música</span></button>
+      <button data-tab="echos" class="app-only"><svg><use href="#i-speaker"/></svg><span>Echos</span></button>
+      <button data-tab="settings" class="app-only"><svg><use href="#i-gear"/></svg><span>Ajustes</span></button>
+    </nav>
+
+    <main>
+      <section id="tab-command" class="panel">
+        <h2 class="app-only">Início</h2>
+        <label class="echo-pick" title="Echo que recebe os comandos">
+          <svg><use href="#i-speaker"/></svg>
+          <select id="device" aria-label="Echo"></select>
+        </label>
+        <form id="cmdForm" class="cmd">
+          <button id="btnMic" type="button" class="mic icon-btn" title="Falar com a Alexa" aria-label="Falar com a Alexa"><svg><use href="#i-mic"/></svg></button>
+          <input id="cmdText" placeholder="Fale ou digite para a Alexa…" autocomplete="off" maxlength="300">
+          <button type="submit" class="primary icon-btn" aria-label="Enviar"><svg><use href="#i-send"/></svg></button>
+        </form>
+        <p id="voiceStatus" class="hint" hidden></p>
+        <div id="pinned" class="pinned" hidden></div>
+        <div id="chips" class="chips"></div>
+        <div class="section-head">
+          <h3>Recentes</h3>
+          <button id="btnClearHistory" class="subtle small">Limpar</button>
+        </div>
+        <ul id="history" class="list"></ul>
+      </section>
+
+      <section id="tab-home" class="panel" hidden>
+        <h2 class="app-only">Casa</h2>
+        <input id="homeSearch" type="search" placeholder="Buscar dispositivo" autocomplete="off">
+        <ul id="homeList" class="list"></ul>
+      </section>
+
+      <section id="tab-alarms" class="panel" hidden>
+        <div class="section-head">
+          <h2>Alarmes e lembretes</h2>
+          <button id="btnAddAlarm" class="subtle">+ Novo</button>
+        </div>
+        <div id="alarmList"></div>
+      </section>
+
+      <section id="tab-routines" class="panel" hidden>
+        <div class="section-head">
+          <h2>Rotinas</h2>
+          <button id="btnNewRoutine" class="subtle">+ Nova</button>
+        </div>
+        <ul id="widgetRoutines" class="list"></ul>
+        <h3>Do app Alexa</h3>
+        <ul id="alexaRoutines" class="list"></ul>
+      </section>
+
+      <section id="tab-more" class="panel" hidden>
+        <ul class="list more-list">
+          <li><button class="row" data-goto="skills"><span class="badge"><svg><use href="#i-puzzle"/></svg></span><div class="body"><div class="title">Skills</div><div class="sub">Procurar e ativar skills</div></div><span class="chev">›</span></button></li>
+          <li><button class="row" data-goto="music"><span class="badge"><svg><use href="#i-music"/></svg></span><div class="body"><div class="title">Música</div><div class="sub">Serviços e serviço preferido</div></div><span class="chev">›</span></button></li>
+          <li><button class="row" data-goto="echos"><span class="badge"><svg><use href="#i-speaker"/></svg></span><div class="body"><div class="title">Echos</div><div class="sub">Seus Echos e caixa de som do PC</div></div><span class="chev">›</span></button></li>
+          <li><button class="row" data-goto="settings"><span class="badge"><svg><use href="#i-gear"/></svg></span><div class="body"><div class="title">Ajustes</div><div class="sub">Atalhos, voz, frases e conta</div></div><span class="chev">›</span></button></li>
+        </ul>
+      </section>
+
+      <section id="tab-skills" class="panel" hidden>
+        <button class="back compact-only" data-goto="more">‹ Mais</button>
+        <h2>Skills</h2>
+        <form id="skillForm" class="cmd">
+          <input id="skillQuery" placeholder="Procurar skill (ex.: sons de chuva)" autocomplete="off" maxlength="80">
+          <button type="submit" class="primary">Procurar</button>
+        </form>
+        <div class="button-row">
+          <button id="btnSkillVoice" class="subtle">Ativar pelo Echo</button>
+          <button id="btnSkillStore" class="subtle">Abrir a loja</button>
+        </div>
+        <p class="hint">A loja abre numa janela já conectada à sua conta. Clique em <b>Ativar</b> na skill que quiser.</p>
+      </section>
+
+      <section id="tab-music" class="panel" hidden>
+        <button class="back compact-only" data-goto="more">‹ Mais</button>
+        <h2>Música</h2>
+        <label class="field"><span>Tocar músicas pelo widget usando</span>
+          <select id="musicPref">
+            <option value="">Padrão da Alexa</option>
+            <option>Amazon Music</option>
+            <option>Spotify</option>
+            <option>Deezer</option>
+            <option>Apple Music</option>
+          </select>
+        </label>
+        <h3>Padrões da sua Alexa</h3>
+        <ul id="musicDefaults" class="list"></ul>
+        <h3>Conectar um serviço</h3>
+        <div class="button-row" id="musicLinks"></div>
+        <p class="hint">Conectar = ativar a skill do serviço na loja e entrar na conta dele. O padrão oficial da Alexa só pode ser trocado no app do celular.</p>
+      </section>
+
+      <section id="tab-echos" class="panel" hidden>
+        <button class="back compact-only" data-goto="more">‹ Mais</button>
+        <h2>Echos</h2>
+        <ul id="echoList" class="list"></ul>
+      </section>
+
+      <section id="tab-settings" class="panel" hidden>
+        <button class="back compact-only" data-goto="more">‹ Mais</button>
+        <h2>Ajustes</h2>
+        <details class="group" open>
+          <summary>Atalhos</summary>
+          <div class="row">
+            <div class="body">
+              <div class="title" id="hotkeyLabel">Nenhum</div>
+              <div class="sub">Falar com a Alexa (qualquer programa)</div>
+            </div>
+            <button id="btnRecordHotkey" class="subtle">Alterar</button>
+            <button id="btnClearHotkey" class="icon small danger" title="Remover">✕</button>
+          </div>
+          <label class="field"><span>Botão do mouse para falar</span>
+            <select id="mouseButton">
+              <option value="">Nenhum</option>
+              <option value="XButton1">Botão lateral "voltar"</option>
+              <option value="XButton2">Botão lateral "avançar"</option>
+              <option value="Middle">Botão do meio (roda)</option>
+            </select>
+          </label>
+          <button id="btnQuickHotkeys" class="subtle">⌨ Atalhos dos comandos e dispositivos</button>
+        </details>
+        <details class="group">
+          <summary>Frases para a Alexa</summary>
+          <label class="check"><input type="checkbox" id="phraseAuto" checked> Ajustar frases automaticamente (liga → ligar, nome do dispositivo, ligar/desligar direto)</label>
+          <form id="fixForm" class="fix-form">
+            <input id="fixFrom" placeholder="Quando eu disser…" maxlength="120">
+            <input id="fixTo" placeholder="Enviar…" maxlength="200">
+            <button type="submit" class="subtle">Adicionar</button>
+          </form>
+          <ul id="fixList" class="list"></ul>
+          <label class="field test-field"><span>Testar uma frase (não envia nada)</span><input id="phraseTest" placeholder="Ex.: liga o robô"></label>
+          <p id="phraseTestResult" class="hint"></p>
+        </details>
+        <details class="group">
+          <summary>Conta</summary>
+          <button id="btnLogout" class="subtle danger">Sair da conta Amazon</button>
+        </details>
+      </section>
+    </main>
+  </div>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-card" role="dialog" aria-labelledby="sheetTitle">
+      <h3 id="sheetTitle"></h3>
+      <ol id="sheetSteps" class="steps"></ol>
+      <ul id="sheetChoices" class="list"></ul>
+      <p id="sheetResult" class="hint"></p>
+      <div class="sheet-actions"><button id="sheetClose" class="primary" disabled>Fechar</button></div>
+    </div>
+  </div>
+
+  <div id="toast" role="status" hidden></div>
+  <div id="modal" class="sheet" hidden>
+    <div class="sheet-card wide" role="dialog" aria-labelledby="modalTitle">
+      <h3 id="modalTitle"></h3>
+      <div id="modalBody"></div>
+      <div id="modalActions" class="sheet-actions"></div>
+    </div>
+  </div>
+
+  <script src="mock.js"></script>
+  <script src="phrases.js"></script>
+  <script src="features.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
