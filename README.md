@@ -32,11 +32,14 @@ assinatura digital. Clique em **Mais informações → Executar assim mesmo**.
 2. Clique em **Entrar com a Amazon** e entre na sua conta na página oficial da Amazon.
    Na página de login, escolha **"Login — Já é cliente?"**, não "Criar conta".
    - Se a janela de login ficar em branco, use **Entrar pelo navegador**: o login abre no seu navegador e,
-     no final, você copia o endereço da barra (começa com `https://www.amazon.com.br/ap/maplanding`)
-     e cola no widget.
+     no final, você só precisa **copiar** o endereço da barra (começa com `https://www.amazon.com.br/ap/maplanding`).
+     O widget percebe sozinho e termina o login (se não perceber, cole o endereço no campo do widget).
+     O pedido de login vale por 15 minutos, mesmo que o widget seja reiniciado nesse meio-tempo.
+   - Se a Amazon cancelar ou recusar o login, o widget mostra o motivo.
 3. Pronto. Escolha o Echo no topo da tela **Início** e envie um comando.
 
 O PC passa a aparecer na sua conta Amazon como **"Alexa Widget (PC)"**, em *Gerenciar conteúdo e dispositivos*.
+**Ajustes → Conta → Sair da conta Amazon** remove esse registro da conta também.
 
 ### Widget, janela e bandeja
 
@@ -110,9 +113,11 @@ Em **Ajustes → Frases para a Alexa** você cadastra correções suas ("quando 
 
 ## Desinstalar
 
-1. Clique com o botão direito no ícone da bandeja → **Sair**.
-2. Apague o `AlexaWidget.exe` e a pasta `%LOCALAPPDATA%\AlexaWidget`.
-3. Opcional: remova **"Alexa Widget (PC)"** em *Gerenciar conteúdo e dispositivos* na sua conta Amazon.
+1. Em **Ajustes → Conta**, clique em **Sair da conta Amazon** (remove "Alexa Widget (PC)" da sua conta).
+2. Clique com o botão direito no ícone da bandeja → **Sair**.
+3. Apague o `AlexaWidget.exe` e a pasta `%LOCALAPPDATA%\AlexaWidget`.
+4. Se ainda sobrar algum **"Alexa Widget (PC)"** em *Gerenciar conteúdo e dispositivos* (por exemplo, de versões
+   anteriores à 1.0.1), remova por lá.
 
 ## Outros países
 
@@ -154,7 +159,10 @@ O software é fornecido "como está", sem garantias.
 - **Rotinas**: `/api/behaviors/v2/automations` (listar), `/api/behaviors/automations/{id}` (alterar/excluir).
 - **Bluetooth**: `/api/bluetooth/enable-pairing-mode/...` + pareamento pelo Windows (`Windows.Devices.Enumeration`).
 - **Voz**: NAudio para o microfone e Whisper.net (`ggml-small-q5_1`) para a transcrição local.
-- Diagnóstico: `AlexaWidget.exe --dump-notifications saida.json`, `--dump-features saida.txt`,
-  `--transcribe audio16k.wav saida.txt`, `--listen-test saida.txt`.
+- **Callback do login**: só o endereço exato `https://www.amazon.<loja>/ap/maplanding` é aceito (esquema, servidor
+  e caminho, também dentro de frames); cancelamento e erros da Amazon viram mensagem; o token só é gravado depois
+  que a sessão web funciona; "Sair" chama `/auth/deregister`.
+- Diagnóstico: `AlexaWidget.exe --login-selftest saida.txt`, `--dump-notifications saida.json`,
+  `--dump-features saida.txt`, `--transcribe audio16k.wav saida.txt`, `--listen-test saida.txt`.
 
 </details>

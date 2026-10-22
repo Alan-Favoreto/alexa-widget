@@ -10,7 +10,7 @@
     <AssemblyName>AlexaWidget</AssemblyName>
     <RootNamespace>AlexaWidget</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Product>Alexa Widget</Product>
     <Description>Widget e app para Windows que controla a Alexa (cliente não oficial)</Description>
   </PropertyGroup>

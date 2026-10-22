@@ -51,6 +51,53 @@ static class Diagnostics
         File.WriteAllLines(outPath, log);
     }
 
+    /// <summary>
+    /// `--login-selftest out.txt`: checks the callback parser on fixed cases, then opens the real login window
+    /// pointed straight at fake callback addresses (cancelled before leaving the PC) to check capture and closing.
+    /// </summary>
+    public static void LoginSelfTest(string outPath)
+    {
+        const string Callback = "https://www.amazon.com.br/ap/maplanding";
+        var log = new List<string>();
+        (string Name, string Url, bool IsCallback, string? Code)[] cases =
+        [
+            ("válido", Callback + "?openid.mode=id_res&openid.oa2.authorization_code=ANabc123", true, "ANabc123"),
+            ("barra final", Callback + "/?openid.oa2.authorization_code=X1", true, "X1"),
+            ("cancelado", Callback + "?openid.mode=cancel", true, null),
+            ("erro", Callback + "?error=access_denied&error_description=Negado", true, null),
+            ("sem código", Callback, true, null),
+            ("prefixo falso", Callback + "-evil?openid.oa2.authorization_code=X", false, null),
+            ("http", "http://www.amazon.com.br/ap/maplanding?openid.oa2.authorization_code=X", false, null),
+            ("outro servidor", "https://www.amazon.com.br.evil.com/ap/maplanding?openid.oa2.authorization_code=X", false, null),
+            ("página de login", "https://www.amazon.com.br/ap/signin?openid.return_to=" + Uri.EscapeDataString(Callback), false, null),
+        ];
+        foreach (var c in cases)
+        {
+            var hit = LoginCallback.TryRead(c.Url, Callback, out var code, out var error);
+            var ok = hit == c.IsCallback && code == c.Code;
+            log.Add($"{(ok ? "OK  " : "FALHA")} parser {c.Name}: callback={hit} code={code ?? "-"} erro={error ?? "-"}");
+        }
+
+        ApplicationConfiguration.Initialize();
+        var dataDir = Path.Combine(Path.GetTempPath(), "alexawidget-login-selftest");
+        foreach (var (name, url, expectCode) in new[]
+                 {
+                     ("janela/código", Callback + "?openid.oa2.authorization_code=TESTE123", "TESTE123"),
+                     ("janela/cancelado", Callback + "?openid.mode=cancel", (string?)null),
+                 })
+        {
+            using var form = new LoginForm(new LoginRequest(url, "verifier", Callback, "https://www.amazon.com.br"), dataDir);
+            var watchdog = new System.Windows.Forms.Timer { Interval = 20000 };
+            watchdog.Tick += (_, _) => { watchdog.Stop(); form.Close(); };
+            watchdog.Start();
+            var result = form.ShowDialog();
+            watchdog.Stop();
+            var ok = form.Code == expectCode && (expectCode is null ? form.Error is not null : result == DialogResult.OK);
+            log.Add($"{(ok ? "OK  " : "FALHA")} {name}: resultado={result} code={form.Code ?? "-"} erro={form.Error ?? "-"}");
+        }
+        File.WriteAllLines(outPath, log);
+    }
+
     /// <summary>`--dump-features out.txt`: each smart-home endpoint's category, feature names and operations (read-only).</summary>
     public static async Task DumpFeaturesAsync(string outPath)
     {

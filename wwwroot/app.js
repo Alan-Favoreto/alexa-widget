@@ -21,6 +21,7 @@ bridge.addEventListener('message', e => {
   if (msg.event === 'voice') return setVoiceState(msg.state, msg.progress);
   if (msg.event === 'voice-trigger') return startVoice();
   if (msg.event === 'command-hotkey') return runQuickHotkey(msg.index);
+  if (msg.event === 'login') return onBrowserLogin(msg);
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);
@@ -698,11 +699,28 @@ $('#pasteForm').addEventListener('submit', e => {
   e.preventDefault();
   finishLogin($('#pasteForm button'), 'loginPaste', { url: $('#pasteUrl').value });
 });
+// The app finished a browser sign-in by itself (the user copied the final address).
+async function onBrowserLogin(msg) {
+  if (!msg.ok) return toast(msg.error, true);
+  $('#pasteForm').hidden = true;
+  $('#pasteUrl').value = '';
+  toast('Conectado à sua conta Amazon');
+  showApp();
+  await refreshAll();
+}
+
 $('#btnLogout').addEventListener('click', async () => {
-  if (!confirm('Sair da conta Amazon neste PC?')) return;
-  await call('logout');
-  state.devices = state.echos = state.endpoints = state.notifications = [];
-  showLogin();
+  if (!confirm('Sair da conta Amazon neste PC? O registro "Alexa Widget (PC)" também sai da sua conta Amazon.')) return;
+  try {
+    const result = await call('logout');
+    state.devices = state.echos = state.endpoints = state.notifications = [];
+    showLogin();
+    if (!result.deviceRemoved) {
+      toast('Você saiu, mas não foi possível remover "Alexa Widget (PC)" da conta. Remova em amazon.com.br → Gerenciar dispositivos.', true);
+    }
+  } catch (err) {
+    fail(err);
+  }
 });
 for (const b of document.querySelectorAll('[data-tab]')) b.addEventListener('click', () => selectTab(b.dataset.tab));
 $('#device').addEventListener('change', e => pickDevice(e.target.value));

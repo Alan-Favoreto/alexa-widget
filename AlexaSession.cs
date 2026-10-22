@@ -20,9 +20,13 @@ sealed class AuthData
     public string? CustomerId { get; set; }
     public Dictionary<string, string> Cookies { get; set; } = [];
     public DateTimeOffset CookiesIssued { get; set; }
+
+    // A sign-in started in the user's browser: the PKCE verifier must outlive a widget restart.
+    public string? PendingVerifier { get; set; }
+    public DateTimeOffset PendingSince { get; set; }
 }
 
-sealed record LoginRequest(string Url, string Verifier, string ReturnUrlPrefix, string CookieUrl);
+sealed record LoginRequest(string Url, string Verifier, string CallbackUrl, string CookieUrl);
 
 /// <summary>
 /// Signs in the same way the Alexa mobile app does: an OAuth/PKCE login on the Amazon sign-in page registers
@@ -40,6 +44,7 @@ sealed class AlexaSession
     const string DeviceModel = "Pixel 7";
     const string UserAgent = "AmazonWebView/Amazon Alexa/" + AppVersion + "/Android/" + OsVersion + "/" + DeviceModel;
     static readonly TimeSpan CookieLifetime = TimeSpan.FromDays(5);
+    static readonly TimeSpan BrowserLoginLifetime = TimeSpan.FromMinutes(15);
     static readonly string[] CsrfPaths =
         ["/api/language", "/spa/index.html", "/api/devices-v2/device?cached=false", "/templates/oobe/d-device-pick.handlebars", "/api/strings"];
 
@@ -67,11 +72,36 @@ sealed class AlexaSession
     public bool IsLoggedIn => data.RefreshToken is not null && data.DeviceType == DeviceType;
     public string? CustomerId => data.CustomerId;
 
+    /// <summary>Where Amazon sends the browser after sign-in, with the authorization code in the query.</summary>
+    public string CallbackUrl => $"https://{Region.WwwHost}/ap/maplanding";
+
+    public bool HasPendingBrowserLogin =>
+        data.PendingVerifier is not null && DateTimeOffset.UtcNow - data.PendingSince < BrowserLoginLifetime;
+
+    /// <summary>Starts a sign-in in the user's browser, remembering the verifier until the code comes back.</summary>
+    public LoginRequest BeginBrowserLogin()
+    {
+        var request = CreateLoginRequest();
+        data.PendingVerifier = request.Verifier;
+        data.PendingSince = DateTimeOffset.UtcNow;
+        Save();
+        return request;
+    }
+
+    public async Task CompleteBrowserLoginAsync(string authorizationCode)
+    {
+        if (!HasPendingBrowserLogin)
+            throw new AlexaException("O login pelo navegador expirou. Clique em \"Entrar pelo navegador\" de novo.");
+        await CompleteLoginAsync(authorizationCode, data.PendingVerifier!, new Dictionary<string, string>());
+        data.PendingVerifier = null;
+        Save();
+    }
+
     public LoginRequest CreateLoginRequest()
     {
         var verifier = Base64Url(RandomNumberGenerator.GetBytes(32));
         var challenge = Base64Url(SHA256.HashData(Encoding.ASCII.GetBytes(verifier)));
-        var returnTo = $"https://{Region.WwwHost}/ap/maplanding";
+        var returnTo = CallbackUrl;
         var query = new Dictionary<string, string>
         {
             ["openid.return_to"] = returnTo,
@@ -140,19 +170,65 @@ sealed class AlexaSession
         var success = TryParse(text)?["response"]?["success"]
             ?? throw new AlexaException($"A Amazon recusou o registro ({(int)resp.StatusCode}): {Shorten(text)}");
 
-        data.RefreshToken = (string?)success["tokens"]?["bearer"]?["refresh_token"]
+        var refreshToken = (string?)success["tokens"]?["bearer"]?["refresh_token"]
             ?? throw new AlexaException("A Amazon não devolveu um token de acesso.");
+
+        // All or nothing: the new registration only replaces the saved one once its web session works.
+        var previous = JsonSerializer.Deserialize<AuthData>(JsonSerializer.SerializeToUtf8Bytes(data))!;
+        data.RefreshToken = refreshToken;
         data.DeviceType = DeviceType;
         data.CustomerId = (string?)success["extensions"]?["customer_info"]?["user_id"];
         data.Cookies.Clear();
-        Save();
-        await EnsureCookiesAsync(force: true);
+        accessToken = null;
+        try
+        {
+            await EnsureCookiesAsync(force: true); // saves on success
+        }
+        catch
+        {
+            data = previous;
+            accessToken = null;
+            Save();
+            _ = DeregisterAsync(refreshToken); // don't leave an unusable "Alexa Widget (PC)" behind
+            throw;
+        }
     }
 
-    public void Logout()
+    /// <summary>Signs out here and removes this PC's registration from the Amazon account.</summary>
+    /// <returns>False when the registration could not be removed (it then has to be removed on amazon.com.br).</returns>
+    public async Task<bool> LogoutAsync()
+    {
+        var removed = data.RefreshToken is null || await DeregisterAsync(data.RefreshToken);
+        ClearLocal();
+        return removed;
+    }
+
+    /// <summary>Forgets the local sign-in only (used when Amazon already revoked it).</summary>
+    void ClearLocal()
     {
         data = new AuthData { DeviceSerial = NewSerial() };
+        accessToken = null;
         Save();
+    }
+
+    async Task<bool> DeregisterAsync(string refreshToken)
+    {
+        try
+        {
+            var (token, _) = await MintAccessTokenAsync(refreshToken);
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"https://{Region.ApiHost}/auth/deregister")
+            {
+                Content = new StringContent("{\"deregister_all_existing_accounts\":false}", Encoding.UTF8, "application/json"),
+            };
+            AddIdentityHeaders(req);
+            req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
+            using var resp = await http.SendAsync(req);
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception e) when (e is HttpRequestException or AlexaException or TaskCanceledException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Calls an alexa.amazon.* endpoint; re-mints the cookies once if they were rejected.</summary>
@@ -198,7 +274,12 @@ sealed class AlexaSession
     {
         if (data.RefreshToken is null) throw new NotLoggedInException();
         if (accessToken is not null && DateTimeOffset.UtcNow < accessTokenExpires) return accessToken;
+        (accessToken, accessTokenExpires) = await MintAccessTokenAsync(data.RefreshToken);
+        return accessToken;
+    }
 
+    async Task<(string Token, DateTimeOffset Expires)> MintAccessTokenAsync(string refreshToken)
+    {
         using var req = new HttpRequestMessage(HttpMethod.Post, $"https://{Region.ApiHost}/auth/token")
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string>
@@ -213,18 +294,17 @@ sealed class AlexaSession
                 ["platform"] = "Android",
                 ["requested_token_type"] = "access_token",
                 ["source_token_type"] = "refresh_token",
-                ["source_token"] = data.RefreshToken,
+                ["source_token"] = refreshToken,
             }),
         };
         AddIdentityHeaders(req);
         using var resp = await http.SendAsync(req);
         var text = await resp.Content.ReadAsStringAsync();
         var json = TryParse(text);
-        accessToken = (string?)json?["access_token"]
+        var token = (string?)json?["access_token"]
             ?? throw new AlexaException($"Falha ao obter token de acesso ({(int)resp.StatusCode}): {Shorten(text)}");
         var lifetime = (int?)json?["expires_in"] ?? 3600;
-        accessTokenExpires = DateTimeOffset.UtcNow.AddSeconds(lifetime - 120);
-        return accessToken;
+        return (token, DateTimeOffset.UtcNow.AddSeconds(lifetime - 120));
     }
 
     /// <summary>Raw request for diagnostics: any host, with the cookie session and/or the access token.</summary>
@@ -291,7 +371,7 @@ sealed class AlexaSession
         if (resp.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Unauthorized)
         {
             // The refresh token was revoked (e.g. the device was removed in "Your devices"): start over.
-            Logout();
+            ClearLocal();
             throw new NotLoggedInException();
         }
 

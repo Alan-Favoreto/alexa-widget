@@ -24,6 +24,11 @@ static class Program
             Diagnostics.ListenTest(listenLog, args.Length == 3 ? int.Parse(args[2]) : null);
             return;
         }
+        if (args is ["--login-selftest", var loginOut])
+        {
+            Diagnostics.LoginSelfTest(loginOut);
+            return;
+        }
         if (args is ["--dump-features", var featuresOut])
         {
             Diagnostics.DumpFeaturesAsync(featuresOut).GetAwaiter().GetResult();

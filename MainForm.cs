@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Web;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -33,7 +32,8 @@ sealed class MainForm : Form
     int commandHotkeys; // how many quick-command hotkey ids are currently registered
     bool exiting;
     Rectangle? appBounds;
-    LoginRequest? browserLogin;
+    readonly System.Windows.Forms.Timer clipboardWatch = new() { Interval = 1000 };
+    string? lastClipboard;
 
     public MainForm(string dataDir, Region region, bool startInAppMode)
     {
@@ -68,7 +68,26 @@ sealed class MainForm : Form
         };
 
         ApplyMode(app: false, initial: true);
-        Load += async (_, _) => await InitWebAsync();
+        Load += async (_, _) =>
+        {
+            try
+            {
+                await InitWebAsync();
+            }
+            catch (Exception ex)
+            {
+                // Usually the WebView2 runtime is missing; say so instead of showing an empty window.
+                MessageBox.Show(this, "Não foi possível iniciar a interface (Microsoft Edge WebView2).\n\n" + ex.Message +
+                    "\n\nInstale o WebView2 Runtime: https://developer.microsoft.com/microsoft-edge/webview2/",
+                    "Alexa Widget", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+        clipboardWatch.Tick += async (_, _) => await CheckClipboardForLoginAsync();
+        if (session.HasPendingBrowserLogin)
+        {
+            lastClipboard = ReadClipboard();
+            clipboardWatch.Start(); // a browser sign-in started before a restart can still finish
+        }
         Load += (_, _) => Task.Run(voice.Preload);
         if (startInAppMode) Shown += (_, _) => ApplyMode(app: true);
     }
@@ -241,14 +260,17 @@ sealed class MainForm : Form
             case "login":
                 return await LoginAsync();
             case "loginBrowser":
-                browserLogin = session.CreateLoginRequest();
-                Process.Start(new ProcessStartInfo(browserLogin.Url) { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo(session.BeginBrowserLogin().Url) { UseShellExecute = true });
+                lastClipboard = ReadClipboard(); // only react to what is copied from now on
+                clipboardWatch.Start();
                 return null;
             case "loginPaste":
                 return await CompleteBrowserLoginAsync(Arg(args, "url"));
             case "logout":
-                session.Logout();
-                return State();
+            {
+                var removed = await session.LogoutAsync();
+                return new { loggedIn = false, deviceRemoved = removed };
+            }
             case "devices":
                 return await api.GetDevicesAsync();
             case "notifications":
@@ -402,30 +424,69 @@ sealed class MainForm : Form
     {
         var request = session.CreateLoginRequest();
         using var dialog = new LoginForm(request, Path.Combine(dataDir, "login"));
-        if (dialog.ShowDialog(this) == DialogResult.OK && dialog.Code is { } code)
+        var result = dialog.ShowDialog(this);
+        if (dialog.Error is { } error) throw new AlexaException(error);
+        if (result == DialogResult.OK && dialog.Code is { } code)
             await session.CompleteLoginAsync(code, request.Verifier, dialog.Cookies);
-        return State();
+        return State(); // window closed by the user: still signed out, nothing to report
     }
 
     /// <summary>
     /// Finishes a sign-in done in the user's own browser: the page it ends on (…/ap/maplanding?…) carries the
-    /// authorization code, which only this process can redeem because it holds the PKCE verifier.
+    /// authorization code, which only this app can redeem because it holds the PKCE verifier.
     /// </summary>
     async Task<object> CompleteBrowserLoginAsync(string pasted)
     {
-        if (browserLogin is null)
-            throw new AlexaException("Clique em \"Entrar pelo navegador\" primeiro.");
-
         pasted = pasted.Trim();
-        var code = Uri.TryCreate(pasted, UriKind.Absolute, out var uri)
-            ? HttpUtility.ParseQueryString(uri.Query)["openid.oa2.authorization_code"]
-            : pasted.Contains(' ') ? null : pasted;
-        if (string.IsNullOrEmpty(code))
-            throw new AlexaException("Esse endereço não tem o código de login. Copie a barra de endereço inteira depois de entrar.");
+        string? code;
+        if (LoginCallback.TryRead(pasted, session.CallbackUrl, out var fromUrl, out var error))
+            code = fromUrl ?? throw new AlexaException(error!);
+        else if (Uri.TryCreate(pasted, UriKind.Absolute, out _) || pasted.Length == 0 || pasted.Contains(' '))
+            throw new AlexaException("Esse não é o endereço do final do login. Copie a barra de endereço inteira da página que abriu depois de entrar (começa com " + session.CallbackUrl + ").");
+        else
+            code = pasted; // just the code itself
 
-        await session.CompleteLoginAsync(code, browserLogin.Verifier, new Dictionary<string, string>());
-        browserLogin = null;
+        clipboardWatch.Stop();
+        await session.CompleteBrowserLoginAsync(code);
         return State();
+    }
+
+    // While a browser sign-in is pending, copying the final address is enough: no need to paste it.
+    async Task CheckClipboardForLoginAsync()
+    {
+        if (!session.HasPendingBrowserLogin)
+        {
+            clipboardWatch.Stop();
+            return;
+        }
+        var text = ReadClipboard();
+        if (text is null || text == lastClipboard) return;
+        lastClipboard = text;
+        if (!LoginCallback.TryRead(text.Trim(), session.CallbackUrl, out _, out _)) return;
+
+        clipboardWatch.Stop();
+        try
+        {
+            await CompleteBrowserLoginAsync(text);
+            ShowWindow();
+            Post(new { @event = "login", ok = true });
+        }
+        catch (Exception ex)
+        {
+            Post(new { @event = "login", ok = false, error = ex.Message });
+        }
+    }
+
+    static string? ReadClipboard()
+    {
+        try
+        {
+            return Clipboard.ContainsText() ? Clipboard.GetText() : null;
+        }
+        catch (System.Runtime.InteropServices.ExternalException)
+        {
+            return null; // another program is holding the clipboard; try again on the next tick
+        }
     }
 
     void ApplyMode(bool app, bool initial = false)
