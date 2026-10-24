@@ -52,7 +52,7 @@ sealed class LoginForm : Form
         Icon = AppIcon.Instance;
         StartPosition = FormStartPosition.CenterScreen;
         Size = LogicalToDeviceUnits(new Size(500, 760));
-        BackColor = Theme.Background;
+        Theme.Follow(this, web, webBackground: false);
         web.DefaultBackgroundColor = Color.White;
         Controls.Add(web);
         Load += async (_, _) =>
@@ -98,6 +98,8 @@ sealed class LoginForm : Form
         // The callback can arrive as a top-level redirect or inside a frame.
         core.NavigationStarting += (_, e) => OnNavigation(e.Uri, () => e.Cancel = true);
         core.FrameNavigationStarting += (_, e) => OnNavigation(e.Uri, () => e.Cancel = true);
+        // Last resort: an address set by script (history.pushState) changes the source without a navigation.
+        core.SourceChanged += (_, _) => OnNavigation(core.Source, () => core.Stop());
         core.Navigate(request.Url);
     }
 

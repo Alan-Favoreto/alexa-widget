@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 
 namespace AlexaWidget;
@@ -11,6 +12,8 @@ sealed class Prefs
     public int HotkeyModifiers { get; set; } = ModControl | ModAlt;
     public int HotkeyKey { get; set; } = 'A';
     public string? HotkeyLabel { get; set; } = "Ctrl+Alt+A";
+    /// <summary>Presses in a row that trigger it (2 = double press).</summary>
+    public int HotkeyTaps { get; set; } = 1;
 
     /// <summary>"XButton1" (side back), "XButton2" (side forward), "Middle", or null.</summary>
     public string? MouseButton { get; set; }
@@ -20,14 +23,53 @@ sealed class Prefs
         try
         {
             var path = Path.Combine(dataDir, "prefs.json");
-            if (File.Exists(path)) return JsonSerializer.Deserialize<Prefs>(File.ReadAllText(path)) ?? new Prefs();
+            if (File.Exists(path)) return JsonSerializer.Deserialize<Prefs>(SafeFile.ReadAllBytes(path)) ?? new Prefs();
         }
-        catch (JsonException) { }
+        catch (Exception e) when (e is JsonException or IOException) { }
         return new Prefs();
     }
 
     public void Save(string dataDir) =>
-        File.WriteAllText(Path.Combine(dataDir, "prefs.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+        SafeFile.WriteAllText(Path.Combine(dataDir, "prefs.json"), JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+}
+
+/// <summary>
+/// Writes go to a temporary file that then replaces the target in one step, so a crash or power cut mid-write never
+/// leaves a half-written file. Reads retry briefly while another program (an antivirus, a backup) holds the file.
+/// </summary>
+static class SafeFile
+{
+    public static void WriteAllText(string path, string text) => WriteAllBytes(path, Encoding.UTF8.GetBytes(text));
+
+    public static void WriteAllBytes(string path, byte[] bytes)
+    {
+        var temp = path + ".tmp";
+        File.WriteAllBytes(temp, bytes);
+        Retry(() => File.Move(temp, path, overwrite: true));
+    }
+
+    public static byte[] ReadAllBytes(string path)
+    {
+        byte[] bytes = [];
+        Retry(() => bytes = File.ReadAllBytes(path));
+        return bytes;
+    }
+
+    static void Retry(Action action)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                action();
+                return;
+            }
+            catch (IOException e) when (attempt < 5 && e is not FileNotFoundException and not DirectoryNotFoundException)
+            {
+                Thread.Sleep(100 * attempt);
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -51,7 +93,7 @@ static class LocalData
         if (!File.Exists(path)) return null;
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            using var doc = JsonDocument.Parse(SafeFile.ReadAllBytes(path));
             return doc.RootElement.Clone();
         }
         catch (JsonException)
@@ -60,12 +102,8 @@ static class LocalData
         }
     }
 
-    public static void Save(string dataDir, string key, JsonElement value)
-    {
-        var path = PathFor(dataDir, key);
-        File.WriteAllText(path + ".tmp", value.GetRawText());
-        File.Move(path + ".tmp", path, overwrite: true);
-    }
+    public static void Save(string dataDir, string key, JsonElement value) =>
+        SafeFile.WriteAllText(PathFor(dataDir, key), value.GetRawText());
 }
 
 /// <summary>Lets a second launch bring the running widget forward (it may be hidden in the tray).</summary>

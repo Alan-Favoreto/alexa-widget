@@ -13,7 +13,7 @@ const ACTION_KINDS = [
   ['off', 'Desligar dispositivo'],
 ];
 
-// Quick commands are {text, hotkey?: {modifiers, key, label}}; older saves were plain strings.
+// Quick commands are {text, hotkey?: {modifiers, key, label, taps?}}; older saves were plain strings.
 const toQuick = list => list.map(x => (typeof x === 'string' ? { text: x } : x)).filter(x => x?.text);
 
 const userData = {
@@ -113,7 +113,7 @@ async function syncCommandHotkeys(quiet = false) {
   const targets = allHotkeyTargets();
   try {
     const { failed } = await call('setCommandHotkeys', {
-      items: targets.map(t => (t.hotkey ? { modifiers: t.hotkey.modifiers, key: t.hotkey.key } : null)),
+      items: targets.map(t => (t.hotkey ? { modifiers: t.hotkey.modifiers, key: t.hotkey.key, taps: t.hotkey.taps ?? 1 } : null)),
     });
     if (failed.length && !quiet) {
       toast(`Atalho em uso por outro programa (ou pelo atalho de voz): ${failed.map(i => targets[i].hotkey.label).join(', ')}`, true);
@@ -149,7 +149,7 @@ function openQuickHotkeys() {
   };
 
   const render = (failed = []) => body.replaceChildren(
-    h('p', { class: 'hint' }, 'Funcionam em qualquer programa, mesmo com o widget oculto.'),
+    h('p', { class: 'hint' }, 'Funcionam em qualquer programa, mesmo com o widget oculto. Aceitam teclas multimídia (ex.: o clique do knob, que é Mudo) e toque duplo: pressione a tecla duas vezes ao gravar.'),
     h('h3', {}, 'Comandos rápidos'),
     h('ul', { class: 'list' }, ...(userData.quick.length ? userData.quick.map((q, i) => row(q.text, q, failed,
       combo => saveQuick(userData.quick.map((o, j) => (j === i ? { ...o, hotkey: combo } : o)), false),
@@ -388,19 +388,17 @@ async function runWidgetRoutine(r, reason) {
   }
 }
 
-// Checked every 20 s (and still at least once a minute while the window is hidden); runs each routine once per slot.
+// Checked every 20 s (at least once a minute while the window is hidden) and right after the PC wakes up;
+// runs each routine once per slot, even if a little late (see schedule.js).
 function runScheduledRoutines() {
-  const now = new Date();
-  const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  const minutes = now.getHours() * 60 + now.getMinutes();
   for (const r of userData.routines) {
-    if (!r.enabled || !r.time) continue;
-    const [hh, mm] = r.time.split(':').map(Number);
-    const due = hh * 60 + mm;
-    const dayOk = !r.days?.length || r.days.includes(now.getDay());
-    if (!dayOk || minutes < due || minutes > due + 2 || r.lastRun === `${today} ${r.time}`) continue;
-    r.lastRun = `${today} ${r.time}`;
+    const slot = Schedule.dueSlot(r);
+    if (!slot || r.lastRun === slot.key) continue;
+    r.lastRun = slot.key;
     saveData('routines', userData.routines);
+    if (slot.lateMinutes >= 2) {
+      call('notify', { text: `Rotina "${r.name}" executada com ${slot.lateMinutes} min de atraso (o PC estava suspenso ou ocupado).` }).catch(() => {});
+    }
     runWidgetRoutine(r, 'agendada');
   }
 }
@@ -454,6 +452,9 @@ function editRoutine(existing) {
       r.actions = r.actions.filter(a => a.kind === 'wait' || (a.kind === 'on' || a.kind === 'off' ? a.endpointId : a.text?.trim()));
       if (!r.phrases.length && !r.time) return toast('Defina uma frase ou um horário.', true);
       if (!r.actions.length) return toast('Adicione pelo menos uma ação completa.', true);
+      // Saved after its time already passed today: start with the next one rather than run now as a "late" slot.
+      const slot = Schedule.dueSlot(r);
+      if (slot && slot.lateMinutes >= 1) r.lastRun = slot.key;
       const i = userData.routines.findIndex(x => x.id === r.id);
       if (i >= 0) userData.routines[i] = r; else userData.routines.push(r);
       saveData('routines', userData.routines);

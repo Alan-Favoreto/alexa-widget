@@ -18,6 +18,16 @@ static class Program
             File.WriteAllText(resultPath, $"{text}\n({(DateTime.Now - started).TotalSeconds:F1} s incl. download)");
             return;
         }
+        if (args is ["--voice-bench", var benchOut, var benchLanguage, .. var benchWavs] && benchWavs.Length > 0)
+        {
+            Diagnostics.VoiceBenchAsync(benchOut, benchLanguage, benchWavs).GetAwaiter().GetResult();
+            return;
+        }
+        if (args is ["--record-samples", var samplesDir, var samplesCount])
+        {
+            Diagnostics.RecordSamplesAsync(samplesDir, int.Parse(samplesCount)).GetAwaiter().GetResult();
+            return;
+        }
         if (args is ["--listen-test", var listenLog, ..] && args.Length <= 3)
         {
             ApplicationConfiguration.Initialize();
@@ -71,6 +81,16 @@ static class Program
         ApplicationConfiguration.Initialize();
         var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlexaWidget");
         Directory.CreateDirectory(dataDir);
-        Application.Run(new MainForm(dataDir, Region.Load(dataDir), startInAppMode: args.Contains("--app")));
+        MainForm form;
+        try
+        {
+            form = new MainForm(dataDir, Region.Load(dataDir), startInAppMode: args.Contains("--app"));
+        }
+        catch (IOException e)
+        {
+            MessageBox.Show(e.Message, "Alexa Widget", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        Application.Run(form);
     }
 }

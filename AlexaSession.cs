@@ -440,22 +440,32 @@ sealed class AlexaSession
 
     AuthData Load()
     {
+        if (!File.Exists(authPath)) return new AuthData();
+        byte[] protectedBytes;
         try
         {
-            if (File.Exists(authPath))
-            {
-                var json = ProtectedData.Unprotect(File.ReadAllBytes(authPath), null, DataProtectionScope.CurrentUser);
-                return JsonSerializer.Deserialize<AuthData>(json) ?? new AuthData();
-            }
+            protectedBytes = SafeFile.ReadAllBytes(authPath);
         }
-        catch (Exception e) when (e is CryptographicException or JsonException) { }
-        return new AuthData();
+        catch (IOException e)
+        {
+            // Unreadable right now (e.g. an antivirus scan): starting over would overwrite a working sign-in.
+            throw new IOException($"Não foi possível ler o login salvo em {authPath}. Feche outros programas que usem a pasta e abra de novo.", e);
+        }
+        try
+        {
+            var json = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
+            return JsonSerializer.Deserialize<AuthData>(json) ?? new AuthData();
+        }
+        catch (Exception e) when (e is CryptographicException or JsonException)
+        {
+            return new AuthData(); // damaged, or encrypted by another Windows user: sign in again
+        }
     }
 
     void Save()
     {
         var json = JsonSerializer.SerializeToUtf8Bytes(data);
-        File.WriteAllBytes(authPath, ProtectedData.Protect(json, null, DataProtectionScope.CurrentUser));
+        SafeFile.WriteAllBytes(authPath, ProtectedData.Protect(json, null, DataProtectionScope.CurrentUser));
     }
 
     static string NewSerial() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));

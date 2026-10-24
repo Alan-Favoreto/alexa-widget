@@ -47,7 +47,7 @@ sealed class RoutinesApi(AlexaSession session)
         (await ListRawAsync()).FirstOrDefault(r => (string?)r["automationId"] == id)?.DeepClone() as JsonObject
         ?? throw new AlexaException("Essa rotina não existe mais. Atualize a lista.");
 
-    static AlexaRoutine Summarize(JsonObject raw)
+    internal static AlexaRoutine Summarize(JsonObject raw)
     {
         var phrases = new List<string>();
         string? time = null;

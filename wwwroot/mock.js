@@ -25,7 +25,7 @@ if (!window.chrome?.webview) {
     features,
   }));
   const results = {
-    state: () => ({ loggedIn: params.get('login') !== '0', mode, region: 'amazon.com.br' }),
+    state: () => ({ loggedIn: params.get('login') !== '0', mode, region: 'amazon.com.br', locale: params.get('locale') || 'pt-BR' }),
     devices: () => ({ devices: [
       { accountName: 'Echo da Sala', serialNumber: 'S1', deviceType: 'A1', deviceFamily: 'ECHO', online: true, capabilities: ['VOLUME_SETTING'] },
       { accountName: 'Echo Show Cozinha', serialNumber: 'S2', deviceType: 'A2', deviceFamily: 'KNIGHT', online: true, capabilities: ['VOLUME_SETTING'] },
@@ -54,6 +54,7 @@ if (!window.chrome?.webview) {
     routines: () => [{ id: 'r1', name: 'Bom dia', enabled: true, phrases: ['bom dia'], time: '07:00', days: [], actions: ['Alexa diz: Bom dia!', 'Comando: previsão do tempo'] }],
     setHotkey: p => Object.assign(prefs, { hotkeyLabel: p.label }),
     clearHotkey: () => Object.assign(prefs, { hotkeyLabel: null }),
+    captureKeys: () => null,
     setMouseButton: p => Object.assign(prefs, { mouseButton: p.button || null }),
   };
   const prefs = { hotkeyLabel: 'Ctrl+Alt+A', mouseButton: null };

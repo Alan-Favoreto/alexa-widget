@@ -21,7 +21,9 @@ bridge.addEventListener('message', e => {
   if (msg.event === 'voice') return setVoiceState(msg.state, msg.progress);
   if (msg.event === 'voice-trigger') return startVoice();
   if (msg.event === 'command-hotkey') return runQuickHotkey(msg.index);
+  if (msg.event === 'key-captured') return capturedKey?.(msg);
   if (msg.event === 'login') return onBrowserLogin(msg);
+  if (msg.event === 'resume') return onResume();
   const p = pending.get(msg.id);
   if (!p) return;
   pending.delete(msg.id);
@@ -51,6 +53,7 @@ const state = {
   notificationsAt: 0,
   history: store.get('history', []),
   selected: store.get('device', null),
+  region: 'amazon.com.br',
 };
 
 const CATEGORY = {
@@ -117,8 +120,16 @@ async function backgroundRefresh() {
   poll.nextAt = Date.now() + poll.delay;
 }
 
-const fmtTime = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' });
-const fmtDay = new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' });
+// Dates, times and sorting follow the Amazon account's locale (settings.json), pt-BR until it is known.
+let locale = 'pt-BR';
+let fmtTime, fmtDay;
+function setLocale(tag) {
+  try { locale = Intl.getCanonicalLocales(tag)[0] || 'pt-BR'; } catch { locale = 'pt-BR'; }
+  document.documentElement.lang = locale;
+  fmtTime = new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' });
+  fmtDay = new Intl.DateTimeFormat(locale, { weekday: 'short', day: '2-digit', month: 'short' });
+}
+setLocale(locale);
 
 function dayLabel(ts) {
   const d = new Date(ts);
@@ -193,7 +204,7 @@ async function loadDevices() {
   state.devices = res?.devices || [];
   state.echos = state.devices
     .filter(isEcho)
-    .sort((a, b) => (b.online - a.online) || a.accountName.localeCompare(b.accountName, 'pt-BR'));
+    .sort((a, b) => (b.online - a.online) || a.accountName.localeCompare(b.accountName, locale));
   if (!state.echos.some(d => d.serialNumber === state.selected)) {
     state.selected = state.echos.find(d => d.online)?.serialNumber ?? state.echos[0]?.serialNumber ?? null;
   }
@@ -354,33 +365,65 @@ async function loadPrefs() {
 
 const KEY_NAMES = { 32: 'Espaço', 13: 'Enter', 9: 'Tab', 192: "'", 186: 'Ç', 188: ',', 190: '.', 191: ';', 189: '-', 187: '=' };
 
+// Multimedia keys work alone (a keyboard knob's click is Mute); Windows reports them to the widget while recording.
+const MEDIA_KEYS = { 173: 'Mudo', 174: 'Volume −', 175: 'Volume +', 176: 'Próxima faixa', 177: 'Faixa anterior', 178: 'Parar mídia', 179: 'Play/Pause' };
+const TAP_WINDOW = 700; // while recording: how long to wait for another press of the same key
+let capturedKey = null;
+
 /**
- * Waits for the next key combination and resolves to {modifiers, key, label}, or null on Esc/invalid.
- * Modifiers use RegisterHotKey's bits: Alt 1, Ctrl 2, Shift 4. A plain key needs a modifier unless it is F1–F24.
+ * Waits for the next key combination, pressed once, twice or three times in a row, and resolves to
+ * {modifiers, key, taps, label}, or null on Esc/invalid. Modifiers use RegisterHotKey's bits: Alt 1, Ctrl 2, Shift 4.
+ * A plain key needs a modifier unless it is F1–F24 or a multimedia key.
  */
 function captureHotkey(labelEl) {
-  labelEl.textContent = 'Pressione a combinação (Esc cancela)…';
+  labelEl.textContent = 'Pressione a tecla ou combinação; duas vezes para toque duplo (Esc cancela)…';
   labelEl.classList.add('recording');
+  call('captureKeys', { on: true }).catch(() => {});
   return new Promise(resolve => {
+    let combo = null;
+    let timer = null;
+    const finish = result => {
+      clearTimeout(timer);
+      document.removeEventListener('keydown', onKey, true);
+      capturedKey = null;
+      call('captureKeys', { on: false }).catch(() => {});
+      labelEl.classList.remove('recording');
+      resolve(result);
+    };
+    const press = (modifiers, key, keyName) => {
+      if (combo && (combo.modifiers !== modifiers || combo.key !== key)) return; // only repeats of the same key count
+      if (combo) combo.taps = Math.min(3, combo.taps + 1);
+      else {
+        const names = [modifiers & 2 && 'Ctrl', modifiers & 1 && 'Alt', modifiers & 4 && 'Shift', keyName].filter(Boolean);
+        combo = { modifiers, key, taps: 1, base: names.join('+') };
+      }
+      const label = hotkeyLabel(combo);
+      labelEl.textContent = combo.taps < 3 ? `${label} (pressione de novo para ×${combo.taps + 1})` : label;
+      clearTimeout(timer);
+      timer = setTimeout(() => finish({ modifiers, key, taps: combo.taps, label }), combo.taps < 3 ? TAP_WINDOW : 0);
+    };
     const onKey = e => {
       e.preventDefault();
       e.stopPropagation();
-      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return; // wait for the actual key
-      document.removeEventListener('keydown', onKey, true);
-      labelEl.classList.remove('recording');
-      if (e.key === 'Escape') return resolve(null);
+      if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key) || e.repeat) return; // wait for the actual key
+      if (e.key === 'Escape') return finish(null);
       const isFunctionKey = e.keyCode >= 112 && e.keyCode <= 135;
       const modifiers = (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.shiftKey ? 4 : 0);
-      if (!modifiers && !isFunctionKey) {
-        toast('Use Ctrl, Alt ou Shift junto com a tecla (ou uma tecla F1–F24).', true);
-        return resolve(null);
+      if (!modifiers && !isFunctionKey && !MEDIA_KEYS[e.keyCode]) {
+        if (combo) return; // a stray key after the first press: keep what was recorded
+        toast('Use Ctrl, Alt ou Shift junto com a tecla (ou uma tecla F1–F24 ou multimídia).', true);
+        return finish(null);
       }
-      const keyName = isFunctionKey ? `F${e.keyCode - 111}` : KEY_NAMES[e.keyCode] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
-      const label = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', keyName].filter(Boolean).join('+');
-      resolve({ modifiers, key: e.keyCode, label });
+      const keyName = isFunctionKey ? `F${e.keyCode - 111}` : MEDIA_KEYS[e.keyCode] ?? KEY_NAMES[e.keyCode] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+      press(modifiers, e.keyCode, keyName);
     };
+    capturedKey = msg => press(msg.modifiers, msg.key, MEDIA_KEYS[msg.key] ?? `Tecla ${msg.key}`);
     document.addEventListener('keydown', onKey, true);
   });
+}
+
+function hotkeyLabel({ base, taps }) {
+  return taps > 1 ? `${base} ×${taps}` : base;
 }
 
 async function recordHotkey() {
@@ -498,13 +541,18 @@ function shapeEndpoint(e) {
   };
 }
 
+// Listed by the account but not smart-home devices: Echos, phones and Alexa apps (ALEXA_VOICE_ENABLED), streaming apps
+// on a Fire TV (APPLICATION: "com amazon firebat", "com disney disneyplus"…) and scene triggers from a light's app
+// (ACTIVITY_TRIGGER: "LIGHT_BASE_SCENE_OPEN"…), none of which can be switched from here.
+const NOT_HOME = new Set(['ALEXA_VOICE_ENABLED', 'APPLICATION', 'ACTIVITY_TRIGGER']);
+
 let homeLoading = null;
 function loadHome() {
   // Shared in-flight request: several screens ask for it at once.
   homeLoading ??= call('smarthome').then(endpoints => {
     state.endpoints = (endpoints || []).map(shapeEndpoint)
-      .filter(e => e.category !== 'ALEXA_VOICE_ENABLED')
-      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+      .filter(e => !NOT_HOME.has(e.category))
+      .sort((a, b) => a.name.localeCompare(b.name, locale));
     renderHome();
     renderPinned();
   }).finally(() => (homeLoading = null));
@@ -512,8 +560,8 @@ function loadHome() {
 }
 
 function renderHome() {
-  const q = $('#homeSearch').value.trim().toLocaleLowerCase('pt-BR');
-  const items = state.endpoints.filter(e => !q || e.name.toLocaleLowerCase('pt-BR').includes(q));
+  const q = $('#homeSearch').value.trim().toLocaleLowerCase(locale);
+  const items = state.endpoints.filter(e => !q || e.name.toLocaleLowerCase(locale).includes(q));
   $('#homeSearch').hidden = state.endpoints.length < 7;
   $('#homeList').replaceChildren(...(items.length ? items.map(e =>
     h('li', { class: 'row' + (e.power ? ' on' : '') + (e.reachable ? '' : ' offline') },
@@ -709,6 +757,12 @@ async function onBrowserLogin(msg) {
   await refreshAll();
 }
 
+// Back from sleep: catch up on widget routines whose time passed, then refresh the stale lists.
+function onResume() {
+  runScheduledRoutines();
+  if (!$('#app').hidden) refreshAll();
+}
+
 $('#btnLogout').addEventListener('click', async () => {
   if (!confirm('Sair da conta Amazon neste PC? O registro "Alexa Widget (PC)" também sai da sua conta Amazon.')) return;
   try {
@@ -716,7 +770,7 @@ $('#btnLogout').addEventListener('click', async () => {
     state.devices = state.echos = state.endpoints = state.notifications = [];
     showLogin();
     if (!result.deviceRemoved) {
-      toast('Você saiu, mas não foi possível remover "Alexa Widget (PC)" da conta. Remova em amazon.com.br → Gerenciar dispositivos.', true);
+      toast(`Você saiu, mas não foi possível remover "Alexa Widget (PC)" da conta. Remova em ${state.region} → Gerenciar dispositivos.`, true);
     }
   } catch (err) {
     fail(err);
@@ -757,6 +811,8 @@ renderHistory();
 (async function init() {
   await initFeatures();
   const s = await call('state');
+  if (s.locale) setLocale(s.locale);
+  if (s.region) state.region = s.region;
   setMode(s.mode);
   if (!s.loggedIn) return showLogin();
   showApp();

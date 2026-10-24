@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using Microsoft.Win32;
 
 namespace AlexaWidget;
 
@@ -29,10 +31,12 @@ sealed class MainForm : Form
     StoreForm? store;
     bool appMode;
     bool inTaskbar; // the widget was minimized and temporarily has a taskbar button
-    int commandHotkeys; // how many quick-command hotkey ids are currently registered
+    Shortcuts? shortcuts;
+    List<Shortcut> commandShortcuts = []; // quick-command/device shortcuts, id CommandIdBase + their index
     bool exiting;
     Rectangle? appBounds;
     readonly System.Windows.Forms.Timer clipboardWatch = new() { Interval = 1000 };
+    readonly Dictionary<string, Func<JsonElement, Task<object?>>> handlers;
     string? lastClipboard;
 
     public MainForm(string dataDir, Region region, bool startInAppMode)
@@ -53,13 +57,20 @@ sealed class MainForm : Form
             },
         };
         prefs = Prefs.Load(dataDir);
+        handlers = CreateHandlers();
 
         Text = "Alexa";
         StartPosition = FormStartPosition.Manual;
         Icon = AppIcon.Instance;
-        BackColor = Theme.Background;
-        web.DefaultBackgroundColor = Theme.Background;
+        Theme.Follow(this, web, webBackground: true);
         Controls.Add(web);
+        // Back from sleep: routines whose time passed meanwhile can still run, and the data is stale.
+        PowerModeChangedEventHandler resumed = (_, e) =>
+        {
+            if (e.Mode == PowerModes.Resume && IsHandleCreated) BeginInvoke(() => Post(new { @event = "resume" }));
+        };
+        SystemEvents.PowerModeChanged += resumed;
+        FormClosed += (_, _) => SystemEvents.PowerModeChanged -= resumed;
 
         tray = new NotifyIcon { Icon = AppIcon.Instance, Text = "Alexa Widget", Visible = true, ContextMenuStrip = BuildTrayMenu() };
         tray.MouseClick += (_, e) =>
@@ -109,8 +120,17 @@ sealed class MainForm : Form
     {
         base.OnHandleCreated(e);
         Theme.ApplyWindowFrame(Handle);
-        if (prefs.HotkeyLabel is not null && !GlobalHotkey.Register(Handle, prefs.HotkeyModifiers, prefs.HotkeyKey))
-            prefs.HotkeyLabel = null; // taken by another program; the settings screen shows it as unset
+        shortcuts?.Dispose();
+        shortcuts = new Shortcuts(Handle, id => BeginInvoke(() => FireShortcut(id)));
+        try
+        {
+            if (ApplyShortcuts().Contains(GlobalHotkey.Id))
+                prefs.HotkeyLabel = null; // taken by another program; the settings screen shows it as unset
+        }
+        catch (AlexaException)
+        {
+            prefs.HotkeyLabel = null;
+        }
         try
         {
             ApplyMouseButton();
@@ -128,9 +148,7 @@ sealed class MainForm : Form
             var wantApp = m.WParam == 1 || appMode;
             BeginInvoke(() => ApplyMode(app: wantApp));
         }
-        else if (m.Msg == GlobalHotkey.WmHotkey && (int)m.WParam == GlobalHotkey.Id) TriggerVoice();
-        else if (m.Msg == GlobalHotkey.WmHotkey && (int)m.WParam >= GlobalHotkey.CommandIdBase)
-            Post(new { @event = "command-hotkey", index = (int)m.WParam - GlobalHotkey.CommandIdBase });
+        else if (m.Msg == GlobalHotkey.WmHotkey) FireShortcut((int)m.WParam);
         base.WndProc(ref m);
     }
 
@@ -160,6 +178,21 @@ sealed class MainForm : Form
         WindowState = FormWindowState.Minimized;
     }
 
+    void FireShortcut(int id)
+    {
+        if (id == GlobalHotkey.Id) TriggerVoice();
+        else if (id >= GlobalHotkey.CommandIdBase) Post(new { @event = "command-hotkey", index = id - GlobalHotkey.CommandIdBase });
+    }
+
+    /// <summary>Registers the voice shortcut and the command ones together; returns the ids that failed.</summary>
+    List<int> ApplyShortcuts()
+    {
+        var voiceShortcut = prefs.HotkeyLabel is null
+            ? []
+            : new[] { new Shortcut(GlobalHotkey.Id, prefs.HotkeyModifiers, prefs.HotkeyKey, prefs.HotkeyTaps) };
+        return shortcuts!.Apply(voiceShortcut.Concat(commandShortcuts));
+    }
+
     /// <summary>Hotkey or mouse button: bring the widget up (without stealing focus from a hidden state) and listen.</summary>
     void TriggerVoice()
     {
@@ -187,8 +220,7 @@ sealed class MainForm : Form
             return;
         }
         tray.Visible = false;
-        GlobalHotkey.Unregister(Handle);
-        for (var i = 0; i < commandHotkeys; i++) GlobalHotkey.Unregister(Handle, GlobalHotkey.CommandIdBase + i);
+        shortcuts?.Dispose();
         mouseHook?.Dispose();
         base.OnFormClosing(e);
     }
@@ -216,26 +248,24 @@ sealed class MainForm : Form
     {
         if (!e.Source.StartsWith($"https://{UiHost}/", StringComparison.Ordinal)) return;
 
-        JsonElement message;
+        var id = 0;
         try
         {
-            message = JsonDocument.Parse(e.WebMessageAsJson).RootElement.Clone();
-        }
-        catch (JsonException)
-        {
-            return;
-        }
-        var id = message.TryGetProperty("id", out var idProp) ? idProp.GetInt32() : 0;
-        var method = message.TryGetProperty("method", out var methodProp) ? methodProp.GetString() ?? "" : "";
-        var args = message.TryGetProperty("params", out var paramsProp) ? paramsProp : default;
-        if (method is "listen" or "stopListening") voice.Trace?.Invoke($"ui: {method} received");
+            // Everything inside the try: this is async void, so anything escaping would close the app.
+            var message = JsonDocument.Parse(e.WebMessageAsJson).RootElement.Clone();
+            id = message.TryGetProperty("id", out var idProp) && idProp.TryGetInt32(out var parsed) ? parsed : 0;
+            var method = message.TryGetProperty("method", out var methodProp) && methodProp.ValueKind == JsonValueKind.String
+                ? methodProp.GetString()!
+                : "";
+            var args = message.TryGetProperty("params", out var paramsProp) ? paramsProp : default;
+            if (method is "listen" or "stopListening") voice.Trace?.Invoke($"ui: {method} received");
+            if (!handlers.TryGetValue(method, out var handler))
+                throw new InvalidOperationException("Ação desconhecida: " + method);
 
-        // Leave the WebView2 callback before doing anything: a modal dialog (the login window) opened
-        // inside it runs a nested message loop that hangs WebView2.
-        await Task.Yield();
-        try
-        {
-            Post(new { id, ok = true, result = await DispatchAsync(method, args) });
+            // Leave the WebView2 callback before doing anything: a modal dialog (the login window) opened
+            // inside it runs a nested message loop that hangs WebView2.
+            await Task.Yield();
+            Post(new { id, ok = true, result = await handler(args) });
         }
         catch (NotLoggedInException ex)
         {
@@ -251,174 +281,175 @@ sealed class MainForm : Form
         }
     }
 
-    async Task<object?> DispatchAsync(string method, JsonElement args)
+    /// <summary>What the UI (wwwroot) can ask for: method name → handler taking the message's "params".</summary>
+    Dictionary<string, Func<JsonElement, Task<object?>>> CreateHandlers()
     {
-        switch (method)
+        var table = new Dictionary<string, Func<JsonElement, Task<object?>>>();
+        void On(string method, Func<JsonElement, Task<object?>> handler) => table.Add(method, handler);
+        void Do(string method, Func<JsonElement, Task> action) => table.Add(method, async a => { await action(a); return null; });
+        void Get(string method, Func<JsonElement, object?> read) => table.Add(method, a => Task.FromResult(read(a)));
+
+        // Account
+        Get("state", _ => State());
+        On("login", async _ => await LoginAsync());
+        Get("loginBrowser", _ =>
         {
-            case "state":
-                return State();
-            case "login":
-                return await LoginAsync();
-            case "loginBrowser":
-                Process.Start(new ProcessStartInfo(session.BeginBrowserLogin().Url) { UseShellExecute = true });
-                lastClipboard = ReadClipboard(); // only react to what is copied from now on
-                clipboardWatch.Start();
-                return null;
-            case "loginPaste":
-                return await CompleteBrowserLoginAsync(Arg(args, "url"));
-            case "logout":
+            Process.Start(new ProcessStartInfo(session.BeginBrowserLogin().Url) { UseShellExecute = true });
+            lastClipboard = ReadClipboard(); // only react to what is copied from now on
+            clipboardWatch.Start();
+            return null;
+        });
+        On("loginPaste", async a => await CompleteBrowserLoginAsync(Arg(a, "url")));
+        On("logout", async _ => new { loggedIn = false, deviceRemoved = await session.LogoutAsync() });
+
+        // Echos, commands and smart home
+        On("devices", async _ => await api.GetDevicesAsync());
+        On("smarthome", async _ => await api.GetEndpointsAsync());
+        Do("command", a => api.TextCommandAsync(Arg(a, "serial"), Arg(a, "deviceType"), OptArg(a, "customerId"), Arg(a, "text")));
+        Do("speak", a => api.SpeakAsync(Arg(a, "serial"), Arg(a, "deviceType"), OptArg(a, "customerId"), Arg(a, "text")));
+        Do("power", a => api.SetPowerAsync(Arg(a, "id"), BoolArg(a, "on")));
+        Do("setFeature", a => api.SetFeatureAsync(Arg(a, "id"), Arg(a, "feature"), Arg(a, "operation"), OptArg(a, "instance"),
+            a.TryGetProperty("payload", out var payload) ? JsonNode.Parse(payload.GetRawText()) : null));
+        On("musicDefaults", async _ => await api.GetMusicDefaultsAsync());
+        On("openStore", async a =>
+        {
+            var query = OptArg(a, "query");
+            var url = $"https://{session.Region.WwwHost}/s?i=alexa-skills" + (string.IsNullOrWhiteSpace(query) ? "" : "&k=" + Uri.EscapeDataString(query));
+            if (store is { IsDisposed: false })
             {
-                var removed = await session.LogoutAsync();
-                return new { loggedIn = false, deviceRemoved = removed };
-            }
-            case "devices":
-                return await api.GetDevicesAsync();
-            case "notifications":
-                return await api.GetNotificationsAsync(fresh: args.ValueKind == JsonValueKind.Object
-                    && args.TryGetProperty("fresh", out var fresh) && fresh.GetBoolean());
-            case "smarthome":
-                return await api.GetEndpointsAsync();
-            case "command":
-                await api.TextCommandAsync(Arg(args, "serial"), Arg(args, "deviceType"),
-                    args.TryGetProperty("customerId", out var c) ? c.GetString() : null, Arg(args, "text"));
-                return null;
-            case "setFeature":
-                await api.SetFeatureAsync(Arg(args, "id"), Arg(args, "feature"), Arg(args, "operation"),
-                    args.TryGetProperty("instance", out var inst) ? inst.GetString() : null,
-                    args.TryGetProperty("payload", out var payload) ? JsonNode.Parse(payload.GetRawText()) : null);
-                return null;
-            case "musicDefaults":
-                return await api.GetMusicDefaultsAsync();
-            case "openStore":
-            {
-                var query = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("query", out var q) ? q.GetString() : null;
-                var url = $"https://{session.Region.WwwHost}/s?i=alexa-skills" + (string.IsNullOrWhiteSpace(query) ? "" : "&k=" + Uri.EscapeDataString(query));
-                if (store is { IsDisposed: false })
-                {
-                    store.Navigate(url);
-                    return null;
-                }
-                store = new StoreForm(Path.Combine(dataDir, "store"), session.Region.CookieDomain, await session.GetWebCookiesAsync(), url);
-                store.Show();
+                store.Navigate(url);
                 return null;
             }
-            case "speak":
-                await api.SpeakAsync(Arg(args, "serial"), Arg(args, "deviceType"),
-                    args.TryGetProperty("customerId", out var speakOwner) ? speakOwner.GetString() : null, Arg(args, "text"));
-                return null;
-            case "routines":
-                return await routines.ListAsync();
-            case "routineRun":
-                await routines.RunAsync(Arg(args, "id"));
-                return null;
-            case "routineEnable":
-                await routines.SetEnabledAsync(Arg(args, "id"), args.GetProperty("enabled").GetBoolean());
-                return null;
-            case "routineDelete":
-                await routines.DeleteAsync(Arg(args, "id"));
-                return null;
-            case "notificationCreate":
+            store = new StoreForm(Path.Combine(dataDir, "store"), session.Region.CookieDomain, await session.GetWebCookiesAsync(), url);
+            store.Show();
+            return null;
+        });
+
+        // Alarms, reminders and routines made in the Alexa app
+        On("notifications", async a => await api.GetNotificationsAsync(fresh: a.ValueKind == JsonValueKind.Object
+            && a.TryGetProperty("fresh", out var fresh) && fresh.ValueKind == JsonValueKind.True));
+        On("notificationCreate", async a =>
+        {
+            var when = DateTime.ParseExact($"{Arg(a, "date")} {Arg(a, "time")}", "yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            return await api.CreateNotificationAsync(Arg(a, "type"), Arg(a, "serial"), Arg(a, "deviceType"),
+                when, OptArg(a, "label"), OptArg(a, "recurring") is { Length: > 0 } recurring ? recurring : null);
+        });
+        Do("notificationDelete", a => api.DeleteNotificationAsync(
+            a.TryGetProperty("notification", out var n) && JsonNode.Parse(n.GetRawText()) is JsonObject notification
+                ? notification
+                : throw new ArgumentException("Parâmetro ausente: notification")));
+        On("routines", async _ => await routines.ListAsync());
+        Do("routineRun", a => routines.RunAsync(Arg(a, "id")));
+        Do("routineEnable", a => routines.SetEnabledAsync(Arg(a, "id"), BoolArg(a, "enabled")));
+        Do("routineDelete", a => routines.DeleteAsync(Arg(a, "id")));
+
+        // Data kept by the UI (quick commands, widget routines, phrase fixes…)
+        Get("loadData", a => LocalData.Load(dataDir, Arg(a, "key")));
+        Get("saveData", a =>
+        {
+            LocalData.Save(dataDir, Arg(a, "key"), a.GetProperty("value"));
+            return null;
+        });
+
+        // Echo as the PC's Bluetooth speaker
+        On("btPaired", async _ => await BluetoothSpeaker.FindPairedAsync());
+        Do("btUnpair", a => BluetoothSpeaker.UnpairAsync(Arg(a, "id")));
+        Do("btPairingMode", a => api.EnablePairingModeAsync(Arg(a, "serial"), Arg(a, "deviceType"), Arg(a, "softwareVersion"), OptArg(a, "customerId")));
+        Do("btCancelPairingMode", a => api.CancelPairingModeAsync(Arg(a, "serial"), Arg(a, "deviceType")));
+        On("btDiscover", async _ => await BluetoothSpeaker.DiscoverAsync(TimeSpan.FromSeconds(30)));
+        Do("btPair", a => BluetoothSpeaker.PairAsync(Arg(a, "id")));
+
+        // Window
+        Get("mode", a =>
+        {
+            ApplyMode(app: Arg(a, "mode") == "app");
+            return State();
+        });
+        Get("hide", _ =>
+        {
+            Hide();
+            return null;
+        });
+        Get("minimize", _ =>
+        {
+            MinimizeToTaskbar();
+            return null;
+        });
+        Get("notify", a =>
+        {
+            tray.ShowBalloonTip(2500, "Alexa", Arg(a, "text"), ToolTipIcon.None);
+            return null;
+        });
+
+        // Voice
+        On("listen", async _ => await voice.ListenAsync((state, progress) => Post(new { @event = "voice", state, progress })));
+        Get("stopListening", _ =>
+        {
+            voice.Stop();
+            return null;
+        });
+
+        // Shortcuts and mouse button
+        Get("prefs", _ => PrefsView());
+        Get("setHotkey", a =>
+        {
+            var previous = (prefs.HotkeyModifiers, prefs.HotkeyKey, prefs.HotkeyLabel, prefs.HotkeyTaps);
+            (prefs.HotkeyModifiers, prefs.HotkeyKey, prefs.HotkeyLabel, prefs.HotkeyTaps) =
+                (a.GetProperty("modifiers").GetInt32(), a.GetProperty("key").GetInt32(), Arg(a, "label"), Taps(a));
+            if (ApplyShortcuts().Contains(GlobalHotkey.Id))
             {
-                var when = DateTime.ParseExact($"{Arg(args, "date")} {Arg(args, "time")}", "yyyy-MM-dd HH:mm", null);
-                var label = args.TryGetProperty("label", out var l) ? l.GetString() : null;
-                var recurring = args.TryGetProperty("recurring", out var r) ? r.GetString() : null;
-                return await api.CreateNotificationAsync(Arg(args, "type"), Arg(args, "serial"), Arg(args, "deviceType"),
-                    when, label, string.IsNullOrEmpty(recurring) ? null : recurring);
+                // Put the previous shortcut back before reporting the conflict.
+                (prefs.HotkeyModifiers, prefs.HotkeyKey, prefs.HotkeyLabel, prefs.HotkeyTaps) = previous;
+                ApplyShortcuts();
+                throw new AlexaException("Esse atalho já está em uso por outro programa. Escolha outra combinação.");
             }
-            case "notificationDelete":
-                await api.DeleteNotificationAsync(JsonNode.Parse(args.GetProperty("notification").GetRawText()) as JsonObject
-                    ?? throw new ArgumentException("Parâmetro ausente: notification"));
-                return null;
-            case "loadData":
-                return LocalData.Load(dataDir, Arg(args, "key"));
-            case "saveData":
-                LocalData.Save(dataDir, Arg(args, "key"), args.GetProperty("value"));
-                return null;
-            case "power":
-                await api.SetPowerAsync(Arg(args, "id"), args.GetProperty("on").GetBoolean());
-                return null;
-            case "btPaired":
-                return await BluetoothSpeaker.FindPairedAsync();
-            case "btUnpair":
-                await BluetoothSpeaker.UnpairAsync(Arg(args, "id"));
-                return null;
-            case "btPairingMode":
-                await api.EnablePairingModeAsync(Arg(args, "serial"), Arg(args, "deviceType"), Arg(args, "softwareVersion"),
-                    args.TryGetProperty("customerId", out var owner) ? owner.GetString() : null);
-                return null;
-            case "btCancelPairingMode":
-                await api.CancelPairingModeAsync(Arg(args, "serial"), Arg(args, "deviceType"));
-                return null;
-            case "btDiscover":
-                return await BluetoothSpeaker.DiscoverAsync(TimeSpan.FromSeconds(30));
-            case "btPair":
-                await BluetoothSpeaker.PairAsync(Arg(args, "id"));
-                return null;
-            case "mode":
-                ApplyMode(app: Arg(args, "mode") == "app");
-                return State();
-            case "hide":
-                Hide();
-                return null;
-            case "minimize":
-                MinimizeToTaskbar();
-                return null;
-            case "listen":
-                return await voice.ListenAsync((state, progress) => Post(new { @event = "voice", state, progress }));
-            case "stopListening":
-                voice.Stop();
-                return null;
-            case "prefs":
-                return PrefsView();
-            case "setHotkey":
-            {
-                var modifiers = args.GetProperty("modifiers").GetInt32();
-                var key = args.GetProperty("key").GetInt32();
-                if (!GlobalHotkey.Register(Handle, modifiers, key))
-                {
-                    // Put the previous shortcut back before reporting the conflict.
-                    if (prefs.HotkeyLabel is not null) GlobalHotkey.Register(Handle, prefs.HotkeyModifiers, prefs.HotkeyKey);
-                    throw new AlexaException("Esse atalho já está em uso por outro programa. Escolha outra combinação.");
-                }
-                (prefs.HotkeyModifiers, prefs.HotkeyKey, prefs.HotkeyLabel) = (modifiers, key, Arg(args, "label"));
-                prefs.Save(dataDir);
-                return PrefsView();
-            }
-            case "setCommandHotkeys":
-            {
-                // Replaces the whole set; items are in quick-command order, null where a command has no shortcut.
-                for (var i = 0; i < commandHotkeys; i++) GlobalHotkey.Unregister(Handle, GlobalHotkey.CommandIdBase + i);
-                var failed = new List<int>();
-                var index = 0;
-                foreach (var item in args.GetProperty("items").EnumerateArray())
-                {
-                    if (item.ValueKind == JsonValueKind.Object && !GlobalHotkey.Register(Handle,
-                            item.GetProperty("modifiers").GetInt32(), item.GetProperty("key").GetInt32(), GlobalHotkey.CommandIdBase + index))
-                        failed.Add(index);
-                    index++;
-                }
-                commandHotkeys = index;
-                return new { failed };
-            }
-            case "notify":
-                tray.ShowBalloonTip(2500, "Alexa", Arg(args, "text"), ToolTipIcon.None);
-                return null;
-            case "clearHotkey":
-                GlobalHotkey.Unregister(Handle);
-                prefs.HotkeyLabel = null;
-                prefs.Save(dataDir);
-                return PrefsView();
-            case "setMouseButton":
-                prefs.MouseButton = args.TryGetProperty("button", out var b) && b.GetString() is { Length: > 0 } name ? name : null;
-                ApplyMouseButton();
-                prefs.Save(dataDir);
-                return PrefsView();
-            default:
-                throw new InvalidOperationException("Ação desconhecida: " + method);
-        }
+            prefs.Save(dataDir);
+            return PrefsView();
+        });
+        Get("clearHotkey", _ =>
+        {
+            prefs.HotkeyLabel = null;
+            ApplyShortcuts();
+            prefs.Save(dataDir);
+            return PrefsView();
+        });
+        Get("setCommandHotkeys", a =>
+        {
+            // Replaces the whole set; items are in quick-command order, null where a command has no shortcut.
+            commandShortcuts = a.GetProperty("items").EnumerateArray()
+                .Select((item, index) => item.ValueKind == JsonValueKind.Object
+                    ? new Shortcut(GlobalHotkey.CommandIdBase + index, item.GetProperty("modifiers").GetInt32(), item.GetProperty("key").GetInt32(), Taps(item))
+                    : null)
+                .OfType<Shortcut>()
+                .ToList();
+            var failed = ApplyShortcuts().Where(id => id >= GlobalHotkey.CommandIdBase).Select(id => id - GlobalHotkey.CommandIdBase).Order();
+            return new { failed };
+        });
+        Get("captureKeys", a =>
+        {
+            // On while the settings screen records a shortcut: multimedia keys never reach the page otherwise.
+            shortcuts!.Capture = a.GetProperty("on").GetBoolean()
+                ? (modifiers, key) => BeginInvoke(() => Post(new { @event = "key-captured", modifiers, key }))
+                : null;
+            return null;
+        });
+        Get("setMouseButton", a =>
+        {
+            prefs.MouseButton = OptArg(a, "button") is { Length: > 0 } name ? name : null;
+            ApplyMouseButton();
+            prefs.Save(dataDir);
+            return PrefsView();
+        });
+        return table;
     }
 
-    object State() => new { loggedIn = session.IsLoggedIn, mode = appMode ? "app" : "compact", region = session.Region.AmazonDomain };
+    object State() => new
+    {
+        loggedIn = session.IsLoggedIn,
+        mode = appMode ? "app" : "compact",
+        region = session.Region.AmazonDomain,
+        locale = session.Region.Locale,
+    };
 
     async Task<object> LoginAsync()
     {
@@ -561,7 +592,19 @@ sealed class MainForm : Form
     }
 
     static string Arg(JsonElement args, string name) =>
-        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.GetString() is { } s
-            ? s
+        OptArg(args, name) ?? throw new ArgumentException("Parâmetro ausente: " + name);
+
+    static string? OptArg(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString()
+            : null;
+
+    // Shortcuts saved before double presses existed have no "taps".
+    static int Taps(JsonElement args) =>
+        args.TryGetProperty("taps", out var v) && v.ValueKind == JsonValueKind.Number ? Math.Clamp(v.GetInt32(), 1, 3) : 1;
+
+    static bool BoolArg(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? v.GetBoolean()
             : throw new ArgumentException("Parâmetro ausente: " + name);
 }

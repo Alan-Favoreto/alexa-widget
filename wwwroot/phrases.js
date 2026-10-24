@@ -56,7 +56,7 @@
     return text
       .replace(/\s+/g, ' ')
       .trim()
-      .replace(/^((ok|ei|oi|hey)[\s,]+)?al[eé]x[ai][\s,.!?:]*/i, '')
+      .replace(/^((ok|ei|oi|hey)[\s,]+)?al[eé]x(?:i?a|i)(?!\p{L})[\s,.!?:]*/iu, '')
       .replace(/^(você\s+|voce\s+)?(pode(ria)?|consegue|poderia)\s+(por favor\s+)?/i, '')
       .replace(/^(eu\s+)?quero\s+que\s+(você\s+|voce\s+)?/i, '')
       .replace(/[,\s]*(por favor|por gentileza)[,\s]*/gi, ' ')

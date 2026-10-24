@@ -68,7 +68,8 @@ O PC passa a aparecer na sua conta Amazon como **"Alexa Widget (PC)"**, em *Gere
 - Clique no 🎤 (ou use o atalho **Ctrl+Alt+A**, que funciona em qualquer programa), espere o bipe e fale.
   A gravação para sozinha quando você faz uma pausa, ou quando você clica de novo.
 - A fala é transcrita **no seu próprio PC**, sem enviar áudio para a internet, com o modelo de voz Whisper.
-  Na primeira vez, o widget baixa o modelo (~180 MB).
+  Na primeira vez, o widget baixa o modelo (~180 MB, conferido pelo SHA-256).
+- Só o trecho com fala é transcrito: um comando curto leva cerca de meio segundo num processador de 6 núcleos.
 - A Alexa responde em voz no Echo escolhido.
 
 ### Atalhos
@@ -80,6 +81,11 @@ Em **Ajustes → Atalhos** (ou no ✎ dos comandos rápidos → **⌨ Atalhos**)
 - um atalho para **cada comando rápido** e para **ligar/desligar cada dispositivo** da casa.
 
 Todos funcionam com o widget escondido. Se outro programa já usa a combinação, o widget avisa.
+
+Os atalhos aceitam **teclas multimídia** sozinhas (Mudo, Volume, Play/Pause: o clique do knob de muitos teclados é o
+Mudo) e **toque duplo ou triplo**: ao gravar, pressione a tecla duas ou três vezes seguidas. Toques diferentes da mesma
+tecla podem ter ações diferentes. Se a quantidade de toques não tiver atalho, a tecla faz o que fazia antes (um clique
+no knob continua tirando o som).
 
 ### Frases que a Alexa entende
 
@@ -104,7 +110,8 @@ Em **Ajustes → Frases para a Alexa** você cadastra correções suas ("quando 
 
 - **Rotinas na conta Amazon**: dá para executar, ativar/desativar e excluir as rotinas criadas no celular,
   mas não criar novas (o serviço recusa). As **rotinas do widget** funcionam só com o PC ligado e só pela
-  frase dita ou digitada no widget, não pela frase dita direto ao Echo.
+  frase dita ou digitada no widget, não pela frase dita direto ao Echo. Se o PC estava suspenso no horário,
+  a rotina ainda roda se ele voltar em até 15 minutos (o ícone da bandeja avisa do atraso).
 - **Serviço de música padrão** da Alexa só pode ser trocado no app do celular. O widget pode mandar seus pedidos
   "tocar…" para o serviço que você escolher.
 - **YouTube Music** não funciona com a Alexa (não existe skill oficial).
@@ -138,6 +145,16 @@ dotnet publish AlexaWidget.csproj -c Release -r win-x64 -o release
 O resultado é um único `release\AlexaWidget.exe`, com o .NET e a interface embutidos.
 Para desenvolver, `dotnet run` abre o widget direto do código.
 
+### Testes
+
+```bash
+dotnet test tests/AlexaWidget.Tests   # C#: login, voz, arquivos, rotinas
+npm test                              # interface: frases e horários das rotinas (só precisa do Node)
+```
+
+O GitHub Actions (`.github/workflows/build.yml`) roda os testes e gera o `AlexaWidget.exe` a cada push;
+uma tag `v*` publica o release com o exe.
+
 A interface (`wwwroot/`) também abre num navegador comum com dados de exemplo (`mock.js`):
 sirva a pasta `wwwroot` (ex.: `python -m http.server`) e acesse `index.html` (`?mode=app` para o modo janela).
 
@@ -163,6 +180,10 @@ O software é fornecido "como está", sem garantias.
   e caminho, também dentro de frames); cancelamento e erros da Amazon viram mensagem; o token só é gravado depois
   que a sessão web funciona; "Sair" chama `/auth/deregister`.
 - Diagnóstico: `AlexaWidget.exe --login-selftest saida.txt`, `--dump-notifications saida.json`,
-  `--dump-features saida.txt`, `--transcribe audio16k.wav saida.txt`, `--listen-test saida.txt`.
+  `--dump-features saida.txt`, `--transcribe audio16k.wav saida.txt`, `--listen-test saida.txt`,
+  `--voice-bench saida.txt pt a.wav b.wav…` (tempo e texto de cada ajuste do Whisper),
+  `--record-samples pasta 5` (grava 5 falas em WAV, com um bipe antes de cada, para o `--voice-bench`).
+- **Voz rápida**: o silêncio em volta da fala é cortado e o Whisper recebe o tamanho real do áudio
+  (`audio_ctx`) em vez da janela fixa de 30 s; se isso não der texto, tenta de novo do jeito completo.
 
 </details>

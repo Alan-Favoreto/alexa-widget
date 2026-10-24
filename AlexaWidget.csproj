@@ -10,7 +10,7 @@
     <AssemblyName>AlexaWidget</AssemblyName>
     <RootNamespace>AlexaWidget</RootNamespace>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <Product>Alexa Widget</Product>
     <Description>Widget e app para Windows que controla a Alexa (cliente não oficial)</Description>
   </PropertyGroup>
@@ -34,5 +34,20 @@
   <ItemGroup>
     <None Update="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- The tests are their own project (tests/AlexaWidget.Tests) and may use the app's internal classes. -->
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <InternalsVisibleTo Include="AlexaWidget.Tests" />
+  </ItemGroup>
+
+  <!-- The WebView2 package always references its WPF control too; this WinForms app doesn't use it, and the
+       reference (built against a newer WindowsBase) only causes the MSB3277 version-conflict warning. -->
+  <Target Name="DropWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup>
+      <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

@@ -22,6 +22,31 @@ static class Theme
     // Must match --bg in wwwroot/app.css so there is no flash while the page loads.
     public static Color Background => IsDark ? Color.FromArgb(0x18, 0x19, 0x1c) : Color.FromArgb(0xf3, 0xf4, 0xf6);
 
+    /// <summary>
+    /// Colors <paramref name="form"/> for the current Windows theme and keeps it in step when the user switches
+    /// between light and dark (the page itself follows through prefers-color-scheme).
+    /// </summary>
+    /// <param name="webBackground">Also paint the WebView2 background (only for pages using the app's colors).</param>
+    public static void Follow(Form form, Microsoft.Web.WebView2.WinForms.WebView2 web, bool webBackground)
+    {
+        void Apply()
+        {
+            form.BackColor = Background;
+            if (webBackground) web.DefaultBackgroundColor = Background;
+            if (form.IsHandleCreated) ApplyWindowFrame(form.Handle);
+        }
+        Apply();
+        UserPreferenceChangedEventHandler changed = (_, e) =>
+        {
+            // The light/dark switch arrives as "General" (ImmersiveColorSet), on a system thread.
+            if (e.Category is UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle
+                && form.IsHandleCreated && !form.IsDisposed)
+                form.BeginInvoke(Apply);
+        };
+        SystemEvents.UserPreferenceChanged += changed;
+        form.FormClosed += (_, _) => SystemEvents.UserPreferenceChanged -= changed; // static event: don't leak the form
+    }
+
     public static void ApplyWindowFrame(IntPtr hwnd)
     {
         var dark = IsDark ? 1 : 0;

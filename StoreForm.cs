@@ -25,10 +25,23 @@ sealed class StoreForm : Form
         Icon = AppIcon.Instance;
         StartPosition = FormStartPosition.CenterScreen;
         Size = LogicalToDeviceUnits(new Size(1100, 800));
-        BackColor = Theme.Background;
+        Theme.Follow(this, web, webBackground: false);
         web.DefaultBackgroundColor = Color.White;
         Controls.Add(web);
-        Load += async (_, _) => await StartAsync();
+        Load += async (_, _) =>
+        {
+            // An event handler is async void: anything thrown here would close the whole app.
+            try
+            {
+                await StartAsync();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "Não foi possível abrir a loja de skills: " + ex.Message, "Alexa Widget",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Close();
+            }
+        };
     }
 
     public void Navigate(string address)

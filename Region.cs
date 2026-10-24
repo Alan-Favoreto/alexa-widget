@@ -33,15 +33,19 @@ sealed record Region(string AmazonDomain, string Locale)
     public static Region Load(string dataDir)
     {
         var path = Path.Combine(dataDir, "settings.json");
+        var fallback = new Region("amazon.com.br", "pt-BR");
+        if (!File.Exists(path))
+        {
+            SafeFile.WriteAllText(path, JsonSerializer.Serialize(fallback, new JsonSerializerOptions { WriteIndented = true }));
+            return fallback;
+        }
         try
         {
-            if (File.Exists(path) && JsonSerializer.Deserialize<Region>(File.ReadAllText(path)) is { AmazonDomain.Length: > 0 } saved)
+            if (JsonSerializer.Deserialize<Region>(SafeFile.ReadAllBytes(path)) is { AmazonDomain.Length: > 0, Locale.Length: > 0 } saved)
                 return saved;
         }
         catch (JsonException) { }
-
-        var fallback = new Region("amazon.com.br", "pt-BR");
-        File.WriteAllText(path, JsonSerializer.Serialize(fallback, new JsonSerializerOptions { WriteIndented = true }));
+        // A hand edit with a typo: keep the file as written so the edit is not lost, and run with the default.
         return fallback;
     }
 }

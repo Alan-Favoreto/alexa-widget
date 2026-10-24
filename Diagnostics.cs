@@ -52,6 +52,71 @@ static class Diagnostics
     }
 
     /// <summary>
+    /// `--record-samples folder count`: records <paramref name="count"/> utterances in a row (a beep before each) and
+    /// saves them as sample1.wav, sample2.wav… for <c>--voice-bench</c>. Nothing is transcribed or sent.
+    /// </summary>
+    public static async Task RecordSamplesAsync(string folder, int count)
+    {
+        var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlexaWidget");
+        Directory.CreateDirectory(folder);
+        var voice = new VoiceInput(dataDir, "pt");
+        for (var i = 1; i <= count; i++)
+        {
+            System.Media.SystemSounds.Asterisk.Play();
+            await Task.Delay(400); // let the beep end before the microphone calibrates
+            if (!await voice.RecordSampleAsync(Path.Combine(folder, $"sample{i}.wav"))) i--;
+        }
+        System.Media.SystemSounds.Exclamation.Play();
+        await Task.Delay(800);
+    }
+
+    /// <summary>
+    /// `--voice-bench out.txt language [model.bin] a.wav [b.wav …]`: transcribes each 16 kHz WAV with every Whisper tuning and
+    /// logs the time (median of 3 runs, model already loaded) and the text, to compare speed and accuracy.
+    /// </summary>
+    public static async Task VoiceBenchAsync(string outPath, string language, string[] wavs)
+    {
+        var dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlexaWidget");
+        // A leading model.bin compares another Whisper model on the same recordings.
+        var model = wavs[0].EndsWith(".bin", StringComparison.OrdinalIgnoreCase) ? wavs[0] : null;
+        if (model is not null) wavs = wavs[1..];
+        var voice = new VoiceInput(dataDir, language, model);
+        var lines = new List<string> { $"{Environment.ProcessorCount} processadores lógicos, idioma {language}" };
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        await voice.TranscribeFileAsync(wavs[0], (_, _) => { }); // download/load the model outside the timings
+        lines.Add($"modelo carregado em {clock.ElapsedMilliseconds} ms");
+
+        WhisperTuning[] tunings =
+        [
+            WhisperTuning.Original,
+            WhisperTuning.Original with { Name = "só corte", Trim = true },
+            WhisperTuning.Original with { Name = "só contexto curto", ShortContext = true },
+            WhisperTuning.Fast,
+        ];
+        foreach (var tuning in tunings)
+        {
+            var total = 0L;
+            foreach (var wav in wavs)
+            {
+                var times = new List<long>();
+                var text = "";
+                for (var run = 0; run < 3; run++)
+                {
+                    clock.Restart();
+                    text = await voice.TranscribeFileAsync(wav, (_, _) => { }, tuning);
+                    times.Add(clock.ElapsedMilliseconds);
+                }
+                times.Sort();
+                total += times[1];
+                lines.Add($"[{tuning.Name}] {Path.GetFileName(wav)}: {times[1]} ms  \"{text}\"");
+            }
+            lines.Add($"[{tuning.Name}] média {total / wavs.Length} ms");
+            lines.Add("");
+        }
+        await File.WriteAllLinesAsync(outPath, lines);
+    }
+
+    /// <summary>
     /// `--login-selftest out.txt`: checks the callback parser on fixed cases, then opens the real login window
     /// pointed straight at fake callback addresses (cancelled before leaving the PC) to check capture and closing.
     /// </summary>

@@ -1,0 +1,8 @@
+{
+  "name": "alexa-widget-ui",
+  "private": true,
+  "description": "Testes da interface (wwwroot). Não há dependências: só o Node.",
+  "scripts": {
+    "test": "node --test \"tests/js/*.test.js\""
+  }
+}
